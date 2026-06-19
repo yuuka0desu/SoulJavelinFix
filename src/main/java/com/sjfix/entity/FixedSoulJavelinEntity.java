@@ -1,129 +1,167 @@
 package com.sjfix.entity;
 
 import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientGamePacketListener;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializers;
+import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.damagesource.DamageSource;
-import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.projectile.AbstractArrow;
+import net.minecraft.world.entity.projectile.Projectile;
+import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
-public class FixedSoulJavelinEntity extends AbstractArrow {
+/**
+ * Safe replacement for Legendary Monsters SoulJavelinEntity.
+ * Extends Projectile directly instead of AbstractArrow to avoid ALL
+ * automatic damage, pickup, and tick interference from vanilla arrows.
+ */
+public class FixedSoulJavelinEntity extends Projectile {
 
     private static final int MAX_LIFETIME = 600;
     private static final int SCAN_INTERVAL = 4;
-    private boolean hasFoil;
+    private static final float DAMAGE = 15.0F;
+    private static final EntityDataAccessor<Boolean> DATA_FOIL =
+        SynchedEntityData.defineId(FixedSoulJavelinEntity.class, EntityDataSerializers.BOOLEAN);
+
+    private int life;
 
     public FixedSoulJavelinEntity(EntityType<? extends FixedSoulJavelinEntity> type, Level level) {
         super(type, level);
     }
 
     public FixedSoulJavelinEntity(Level level, LivingEntity shooter) {
-        super(SoulJavelinFixMod.FIXED_SOUL_JAVELIN.get(), shooter, level);
+        super(SoulJavelinFixMod.FIXED_SOUL_JAVELIN.get(), level);
+        this.setOwner(shooter);
+        this.setPos(shooter.getX(), shooter.getEyeY() - 0.1, shooter.getZ());
     }
 
-    // ---- lifecycle ---------------------------------------------------
+    @Override
+    protected void defineSynchedData() {
+        this.entityData.define(DATA_FOIL, false);
+    }
+
+    // ---- tick (fully manual, no AbstractArrow interference) -----------
 
     @Override
     public void tick() {
-        super.tick();
+        // Entity.baseTick() — handles fire, nether portal, etc.
+        super.baseTick();
+
         if (!this.level().isClientSide()) {
-            // Never drop as an item
-            this.pickup = Pickup.DISALLOWED;
-            if (this.tickCount > MAX_LIFETIME) {
+            if (++this.life > MAX_LIFETIME) {
                 this.discard();
+                return;
             }
         }
-    }
 
-    // ---- collision throttle ------------------------------------------
+        // Movement + collision
+        Vec3 movement = this.getDeltaMovement();
+        double dx = this.getX() + movement.x;
+        double dy = this.getY() + movement.y;
+        double dz = this.getZ() + movement.z;
+        this.setPos(dx, dy, dz);
 
-    @Override
-    protected EntityHitResult findHitEntity(Vec3 start, Vec3 end) {
-        if (this.level().isClientSide()) {
-            return super.findHitEntity(start, end);
+        // Only check for entity hits on throttle ticks (server side)
+        if (!this.level().isClientSide() && this.tickCount % SCAN_INTERVAL == 0) {
+            HitResult hit = ProjectileUtil.getHitResultOnMoveVector(this, this::canHitEntity);
+            if (hit.getType() == HitResult.Type.ENTITY) {
+                this.onHitTarget((EntityHitResult) hit);
+            } else if (hit.getType() == HitResult.Type.BLOCK) {
+                this.onHitBlock();
+            }
         }
-        if (this.tickCount % SCAN_INTERVAL != 0) {
-            return null;
-        }
-        return super.findHitEntity(start, end);
-    }
 
-    // ---- hit: single damage only, no AbstractArrow double-hit ---------
+        // Throttled scan skipped ticks: reuse last scan position
+        // But we already moved, so we just continue flying.
 
-    @Override
-    protected void onHit(HitResult result) {
-        // Do NOT call super.onHit() — it would trigger AbstractArrow.onHitEntity
-        // which deals a second damage instance.
-        if (result instanceof EntityHitResult entityResult) {
-            onHitTarget(entityResult);
+        // Gravity
+        if (!this.isNoGravity()) {
+            this.setDeltaMovement(movement.x * 0.99, movement.y * 0.99 - 0.05, movement.z * 0.99);
         } else {
-            // Block hit: play sound and discard
-            this.playSound(this.getDefaultHitGroundSoundEvent(), 1.0F, 1.0F);
+            this.setDeltaMovement(movement.x * 0.99, movement.y * 0.99, movement.z * 0.99);
         }
-        if (!this.level().isClientSide()) {
-            this.discard();
+
+        // Ghost particles (client only)
+        if (this.level().isClientSide()) {
+            for (int i = 0; i < 2; i++) {
+                this.level().addParticle(ParticleTypes.SOUL,
+                    this.getX(), this.getY(), this.getZ(),
+                    0, 0, 0);
+            }
         }
     }
 
     private void onHitTarget(EntityHitResult result) {
         Entity hitEntity = result.getEntity();
         Entity owner = this.getOwner();
-        if (hitEntity == owner) {
-            return;
-        }
-
-        float damage = 8.0F;
-        if (hitEntity instanceof LivingEntity livingTarget) {
-            damage += livingTarget.getMaxHealth() * 0.03F;
-        }
+        if (hitEntity == owner) return;
 
         DamageSource source;
         if (owner instanceof LivingEntity livingOwner) {
-            source = livingOwner.damageSources().trident(this, livingOwner);
+            source = this.level().damageSources().trident(this, livingOwner);
         } else {
             source = this.level().damageSources().trident(this, this);
         }
 
-        if (hitEntity.hurt(source, damage)) {
+        // Single 15.0 fixed damage
+        if (hitEntity.hurt(source, DAMAGE)) {
             this.playSound(SoundEvents.TRIDENT_HIT, 1.0F, 1.0F);
-            // ghostly soul particles (matching original)
             if (this.level() instanceof ServerLevel sl) {
-                for (int i = 0; i < 7; i++) {
+                for (int i = 0; i < 10; i++) {
                     sl.sendParticles(ParticleTypes.SOUL,
                         this.getX(), this.getY(), this.getZ(),
-                        1, 0.3, 0.3, 0.3, 0.02);
+                        1, 0.3, 0.3, 0.3, 0.05);
                 }
             }
         }
+        this.discard();
     }
 
-    // ---- visual / sound / pickup --------------------------------------
+    private void onHitBlock() {
+        this.playSound(SoundEvents.TRIDENT_HIT_GROUND, 1.0F, 1.0F);
+        this.discard();
+    }
+
+    // ---- net/sync ----------------------------------------------------
+
+    @Override
+    protected void readAdditionalSaveData(CompoundTag tag) {
+        super.readAdditionalSaveData(tag);
+        this.life = tag.getInt("Life");
+        this.entityData.set(DATA_FOIL, tag.getBoolean("Foil"));
+    }
+
+    @Override
+    protected void addAdditionalSaveData(CompoundTag tag) {
+        super.addAdditionalSaveData(tag);
+        tag.putInt("Life", this.life);
+        tag.putBoolean("Foil", this.isFoil());
+    }
+
+    @Override
+    public Packet<ClientGamePacketListener> getAddEntityPacket() {
+        return new ClientboundAddEntityPacket(this);
+    }
+
+    // ---- accessors ---------------------------------------------------
 
     public boolean isFoil() {
-        return this.hasFoil;
+        return this.entityData.get(DATA_FOIL);
     }
 
     public void setHasFoil(boolean foil) {
-        this.hasFoil = foil;
-    }
-
-    @Override
-    protected ItemStack getPickupItem() {
-        // Never drop — pickup is forced to DISALLOWED every tick
-        return ItemStack.EMPTY;
-    }
-
-    @Override
-    protected SoundEvent getDefaultHitGroundSoundEvent() {
-        return SoundEvents.TRIDENT_HIT_GROUND;
+        this.entityData.set(DATA_FOIL, foil);
     }
 }
