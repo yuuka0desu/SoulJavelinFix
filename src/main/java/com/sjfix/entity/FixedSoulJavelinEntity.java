@@ -1,7 +1,6 @@
 package com.sjfix.entity;
 
 import net.minecraft.core.registries.Registries;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.damagesource.DamageSource;
@@ -17,31 +16,18 @@ import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
-/**
- * Safe replacement for Legendary Monsters SoulJavelinEntity.
- *
- * Original problems:
- * 1. ClassCastException when owner is not LivingEntity
- * 2. Per-tick expensive entity collision scans
- * 3. No lifetime cap causing accumulation & tick stalls
- *
- * This replacement:
- * - Owner-access is null/type safe
- * - Collision scans throttled to every 4 ticks
- * - Auto-removed after 600 ticks or after dealing damage
- * - Same visible behavior (trident projectile) so game experience is preserved
- */
 public class FixedSoulJavelinEntity extends AbstractArrow {
 
-    private static final int MAX_LIFETIME = 600; // 30s
+    private static final int MAX_LIFETIME = 600;
     private static final int SCAN_INTERVAL = 4;
     private boolean dealtDamage;
+    private boolean hasFoil;
 
     public FixedSoulJavelinEntity(EntityType<? extends FixedSoulJavelinEntity> type, Level level) {
         super(type, level);
     }
 
-    public FixedSoulJavelinEntity(Level level, LivingEntity shooter, ItemStack referenceItem) {
+    public FixedSoulJavelinEntity(Level level, LivingEntity shooter) {
         super(SoulJavelinFixMod.FIXED_SOUL_JAVELIN.get(), shooter, level);
     }
 
@@ -71,45 +57,60 @@ public class FixedSoulJavelinEntity extends AbstractArrow {
         return super.findHitEntity(start, end);
     }
 
-    // ---- hit handling (safe, no ClassCastException) --------------------
+    // ---- hit ---------------------------------------------------------
+    // We override onHitEntity (not onHit) so that we fully control damage
+    // without AbstractArrow.onHitEntity applying a second (or third) hit.
+    // onHit → calls onHitEntity (our override, single damage) or onHitBlock.
 
     @Override
     protected void onHit(HitResult result) {
-        if (result instanceof EntityHitResult entityResult) {
-            Entity hitEntity = entityResult.getEntity();
-            Entity owner = this.getOwner();
-
-            if (hitEntity != owner && !this.dealtDamage) {
-                float damage = 8.0F;
-                if (hitEntity instanceof LivingEntity livingTarget) {
-                    damage += livingTarget.getMaxHealth() * 0.03F;
-                }
-
-                DamageSource source;
-                if (owner instanceof LivingEntity livingOwner) {
-                    source = livingOwner.damageSources().trident(this, livingOwner);
-                } else {
-                    source = new DamageSource(
-                        this.level().registryAccess()
-                            .registryOrThrow(Registries.DAMAGE_TYPE)
-                            .getHolderOrThrow(DamageTypes.TRIDENT),
-                        this, this
-                    );
-                }
-
-                if (hitEntity.hurt(source, damage)) {
-                    this.dealtDamage = true;
-                    this.playSound(SoundEvents.TRIDENT_HIT, 1.0F, 1.0F);
-                }
-            }
-        }
-        super.onHit(result);
+        super.onHit(result); // delegates to onHitEntity / onHitBlock
         if (!this.level().isClientSide()) {
             this.discard();
         }
     }
 
+    @Override
+    protected void onHitEntity(EntityHitResult result) {
+        Entity hitEntity = result.getEntity();
+        Entity owner = this.getOwner();
+
+        if (this.dealtDamage || hitEntity == owner) {
+            return;
+        }
+
+        float damage = 8.0F;
+        if (hitEntity instanceof LivingEntity livingTarget) {
+            damage += livingTarget.getMaxHealth() * 0.03F;
+        }
+
+        DamageSource source;
+        if (owner instanceof LivingEntity livingOwner) {
+            source = livingOwner.damageSources().trident(this, livingOwner);
+        } else {
+            source = new DamageSource(
+                this.level().registryAccess()
+                    .registryOrThrow(Registries.DAMAGE_TYPE)
+                    .getHolderOrThrow(DamageTypes.TRIDENT),
+                this, this
+            );
+        }
+
+        if (hitEntity.hurt(source, damage)) {
+            this.dealtDamage = true;
+            this.playSound(SoundEvents.TRIDENT_HIT, 1.0F, 1.0F);
+        }
+    }
+
     // ---- visual / sound / pickup --------------------------------------
+
+    public boolean isFoil() {
+        return this.hasFoil;
+    }
+
+    public void setHasFoil(boolean foil) {
+        this.hasFoil = foil;
+    }
 
     @Override
     protected ItemStack getPickupItem() {

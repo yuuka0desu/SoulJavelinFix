@@ -1,12 +1,9 @@
 package com.sjfix.mixin;
 
 import com.sjfix.entity.FixedSoulJavelinEntity;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.projectile.AbstractArrow;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -16,13 +13,11 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Mixin that replaces original SoulJavelinEntity instances with our safe,
- * optimized FixedSoulJavelinEntity on their first server tick.
- *
- * We cannot prevent the original from being spawned (boss AI creates it via
- * "new SoulJavelinEntity()"), but we can discard it immediately on its first
- * tick and spawn a replacement in the same position with the same kinematics.
- * This is transparent to both the spawning code and the player.
+ * Replaces original SoulJavelinEntity with FixedSoulJavelinEntity on the
+ * first server tick. Position and velocity are copied from the original;
+ * rotation is deliberately not set, letting Projectile.updateRotation()
+ * align the entity with its velocity on the next tick so that there is
+ * no spinning artifact.
  */
 @Mixin(
     targets = "net.miauczel.legendary_monsters.entity.AnimatedMonster.Projectile.SoulJavelinEntity",
@@ -34,13 +29,12 @@ public abstract class SoulJavelinReplaceMixin extends AbstractArrow {
         super(null, null);
     }
 
+    @Shadow(remap = false)
+    public abstract boolean isFoil();
+
     @Unique
     private boolean sjfix$replaced = false;
 
-    /**
-     * On the first server-side tick, copy all relevant state from the original
-     * javelin, spawn a FixedSoulJavelinEntity in its place, then discard self.
-     */
     @Inject(method = "m_8119_", at = @At("HEAD"), cancellable = true, remap = true)
     private void sjfix$replaceOnFirstTick(CallbackInfo ci) {
         if (this.level().isClientSide() || this.sjfix$replaced) {
@@ -50,7 +44,6 @@ public abstract class SoulJavelinReplaceMixin extends AbstractArrow {
 
         Entity owner = this.getOwner();
         if (!(owner instanceof LivingEntity livingOwner)) {
-            // Owner is invalid – discard the original without replacement
             this.discard();
             ci.cancel();
             return;
@@ -58,19 +51,19 @@ public abstract class SoulJavelinReplaceMixin extends AbstractArrow {
 
         Vec3 pos = this.position();
         Vec3 vel = this.getDeltaMovement();
-
-        // Build a non-empty reference item so the renderer shows a trident
-        ItemStack ref = new ItemStack(Items.TRIDENT);
+        boolean foil = this.isFoil();
 
         FixedSoulJavelinEntity replacement = new FixedSoulJavelinEntity(
-            this.level(), livingOwner, ref
+            this.level(), livingOwner
         );
-        replacement.absMoveTo(pos.x, pos.y, pos.z, this.getYRot(), this.getXRot());
+        // Only copy position and velocity; rotation will be derived from
+        // velocity by Projectile.updateRotation() on next tick.
+        replacement.setPos(pos.x, pos.y, pos.z);
         replacement.setDeltaMovement(vel.x, vel.y, vel.z);
         replacement.setNoGravity(this.isNoGravity());
+        replacement.setHasFoil(foil);
 
         this.level().addFreshEntity(replacement);
-
         this.discard();
         ci.cancel();
     }
