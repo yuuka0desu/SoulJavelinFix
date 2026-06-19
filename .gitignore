@@ -1,0 +1,19 @@
+# Gradle
+.gradle/
+build/
+run/
+
+# Local dependency jars
+libs/
+
+# IDE
+.idea/
+*.iml
+.eclipse/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+Thumbs.db

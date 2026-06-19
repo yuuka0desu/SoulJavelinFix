@@ -1,0 +1,40 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+
+[[mods]]
+modId="souljavelfix"
+version="1.0.0"
+displayName="Soul Javelin Fix"
+description='''
+Replaces Legendary Monsters SoulJavelinEntity with a safe, optimized implementation.
+
+Original SoulJavelin issues fixed:
+- Owner ClassCastException crash
+- Per-tick entity collision scan overhead
+- No lifetime cap causing accumulation and server tick stalls
+
+The replacement entity is transparently substituted on first tick and
+behaves identically (trident projectile, same damage, same visuals).
+'''
+
+[[dependencies.souljavelfix]]
+modId="forge"
+mandatory=true
+versionRange="[47,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.souljavelfix]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.20.2)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.souljavelfix]]
+modId="legendary_monsters"
+mandatory=true
+versionRange="*"
+ordering="AFTER"
+side="BOTH"

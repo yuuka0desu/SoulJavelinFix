@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "package": "com.sjfix.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "sjfix.refmap.json",
+  "mixins": [
+    "SoulJavelinReplaceMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "minVersion": "0.8"
+}
