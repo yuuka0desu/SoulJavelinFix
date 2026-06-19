@@ -4,7 +4,7 @@ license="MIT"
 
 [[mods]]
 modId="souljavelfix"
-version="1.0.1"
+version="1.0.2"
 displayName="Soul Javelin Fix"
 description='''
 Replaces Legendary Monsters SoulJavelinEntity with a safe, optimized implementation.

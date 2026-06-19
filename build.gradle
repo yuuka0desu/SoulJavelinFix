@@ -3,7 +3,7 @@ plugins {
     id 'org.spongepowered.mixin' version '0.7-SNAPSHOT'
 }
 
-version = '1.0.1'
+version = '1.0.2'
 group = 'com.sjfix'
 archivesBaseName = 'SoulJavelinFix-1.20.1'
 
