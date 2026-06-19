@@ -1,6 +1,7 @@
 package com.sjfix.entity;
 
-import net.minecraft.core.registries.Registries;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.damagesource.DamageSource;
@@ -10,7 +11,6 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.projectile.AbstractArrow;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -20,7 +20,6 @@ public class FixedSoulJavelinEntity extends AbstractArrow {
 
     private static final int MAX_LIFETIME = 600;
     private static final int SCAN_INTERVAL = 4;
-    private boolean dealtDamage;
     private boolean hasFoil;
 
     public FixedSoulJavelinEntity(EntityType<? extends FixedSoulJavelinEntity> type, Level level) {
@@ -36,8 +35,12 @@ public class FixedSoulJavelinEntity extends AbstractArrow {
     @Override
     public void tick() {
         super.tick();
-        if (!this.level().isClientSide() && this.tickCount > MAX_LIFETIME) {
-            this.discard();
+        if (!this.level().isClientSide()) {
+            // Never drop as an item
+            this.pickup = Pickup.DISALLOWED;
+            if (this.tickCount > MAX_LIFETIME) {
+                this.discard();
+            }
         }
     }
 
@@ -48,34 +51,33 @@ public class FixedSoulJavelinEntity extends AbstractArrow {
         if (this.level().isClientSide()) {
             return super.findHitEntity(start, end);
         }
-        if (this.dealtDamage) {
-            return null;
-        }
         if (this.tickCount % SCAN_INTERVAL != 0) {
             return null;
         }
         return super.findHitEntity(start, end);
     }
 
-    // ---- hit ---------------------------------------------------------
-    // We override onHitEntity (not onHit) so that we fully control damage
-    // without AbstractArrow.onHitEntity applying a second (or third) hit.
-    // onHit → calls onHitEntity (our override, single damage) or onHitBlock.
+    // ---- hit: single damage only, no AbstractArrow double-hit ---------
 
     @Override
     protected void onHit(HitResult result) {
-        super.onHit(result); // delegates to onHitEntity / onHitBlock
+        // Do NOT call super.onHit() — it would trigger AbstractArrow.onHitEntity
+        // which deals a second damage instance.
+        if (result instanceof EntityHitResult entityResult) {
+            onHitTarget(entityResult);
+        } else {
+            // Block hit: play sound and discard
+            this.playSound(this.getDefaultHitGroundSoundEvent(), 1.0F, 1.0F);
+        }
         if (!this.level().isClientSide()) {
             this.discard();
         }
     }
 
-    @Override
-    protected void onHitEntity(EntityHitResult result) {
+    private void onHitTarget(EntityHitResult result) {
         Entity hitEntity = result.getEntity();
         Entity owner = this.getOwner();
-
-        if (this.dealtDamage || hitEntity == owner) {
+        if (hitEntity == owner) {
             return;
         }
 
@@ -88,17 +90,19 @@ public class FixedSoulJavelinEntity extends AbstractArrow {
         if (owner instanceof LivingEntity livingOwner) {
             source = livingOwner.damageSources().trident(this, livingOwner);
         } else {
-            source = new DamageSource(
-                this.level().registryAccess()
-                    .registryOrThrow(Registries.DAMAGE_TYPE)
-                    .getHolderOrThrow(DamageTypes.TRIDENT),
-                this, this
-            );
+            source = this.level().damageSources().trident(this, this);
         }
 
         if (hitEntity.hurt(source, damage)) {
-            this.dealtDamage = true;
             this.playSound(SoundEvents.TRIDENT_HIT, 1.0F, 1.0F);
+            // ghostly soul particles (matching original)
+            if (this.level() instanceof ServerLevel sl) {
+                for (int i = 0; i < 7; i++) {
+                    sl.sendParticles(ParticleTypes.SOUL,
+                        this.getX(), this.getY(), this.getZ(),
+                        1, 0.3, 0.3, 0.3, 0.02);
+                }
+            }
         }
     }
 
@@ -114,7 +118,8 @@ public class FixedSoulJavelinEntity extends AbstractArrow {
 
     @Override
     protected ItemStack getPickupItem() {
-        return new ItemStack(Items.TRIDENT);
+        // Never drop — pickup is forced to DISALLOWED every tick
+        return ItemStack.EMPTY;
     }
 
     @Override
